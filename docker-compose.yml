@@ -1,6 +1,8 @@
 version: "3.3"
 services:
   spark-master:
+    env_file:
+      - .env
     build: "."
     ports:
       - "9090:8080"
@@ -12,6 +14,8 @@ services:
       - SPARK_LOCAL_IP=spark-master
       - SPARK_WORKLOAD=master
   spark-worker-a:
+    env_file:
+      - .env
     build: "."
     ports:
       - "9091:8080"
@@ -30,6 +34,8 @@ services:
        - ./apps:/opt/spark-apps
        - ./data:/opt/spark-data
   spark-worker-b:
+    env_file:
+        - .env
     build: "."
     ports:
       - "9092:8080"
@@ -47,10 +53,3 @@ services:
     volumes:
         - ./apps:/opt/spark-apps
         - ./data:/opt/spark-data
-  demo-database:
-    image: postgres:11.7-alpine
-    ports: 
-      - "5432:5432"
-    environment: 
-      - POSTGRES_DB=marvel_lake
-      - POSTGRES_PASSWORD=iamironman

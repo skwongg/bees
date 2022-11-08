@@ -20,7 +20,9 @@ RUN wget --no-verbose -O apache-spark.tgz "https://archive.apache.org/dist/spark
 
 FROM builder as apache-spark
 
+COPY requirements.txt /opt/spark/requirements.txt
 WORKDIR /opt/spark
+RUN pip3 install -r requirements.txt
 
 ENV SPARK_MASTER_PORT=7077 \
 SPARK_MASTER_WEBUI_PORT=8080 \
