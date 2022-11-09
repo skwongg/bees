@@ -1,6 +1,6 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import explode, datediff, year, expr, to_date\
-    , collect_set, countDistinct
+    , collect_set, countDistinct, col
 
 import requests
 import hashlib
@@ -101,25 +101,25 @@ def gold_layer(spark_session, save_dir):
     ep = spark_session.read.parquet("/opt/spark-data/case/silver/events/events.parquet")
     ep.createOrReplaceTempView("ep")
     event_df = ep.select(explode(ep.list_of_characters).alias("character_name"), datediff(ep.end, ep.start)\
-        .alias("datediff")).groupBy("character_name").sum("datediff")
+        .alias("datediff")).groupBy("character_name").sum("datediff").select("character_name", col("sum(datediff)").alias("days_in_events"))
 
     cp = spark_session.read.parquet("/opt/spark-data/case/silver/characters/characters.parquet")
     cp.createOrReplaceTempView("cp")
-    cp.select(cp.id, cp.name, cp.comics_count, cp.series_count, cp.stories_count, cp.events_count)\
-        .join(event_df, cp.name == event_df.character_name).orderBy(cp.comics_count, ascending=False).limit(10).show()
-    cp.write.mode('overwrite').parquet(char_participation)
-
+    zc3 = cp.select(cp.id, cp.name, cp.comics_count, cp.series_count, cp.stories_count, cp.events_count).orderBy(cp.comics_count, ascending=False).limit(10)
+    outp = zc3.join(event_df, cp.name == event_df.character_name)
+    outp.write.mode('overwrite').parquet(char_participation)
+            
 
     ## second one -- the number of characters appearing each year in events
     eventParquet = spark_session.read.parquet("/opt/spark-data/case/silver/events/events.parquet")
     eventParquet.createOrReplaceTempView("eventParquet")
-    eventParquet.select(explode(eventParquet.list_of_characters).alias("character_name"),\
+    epf3 = eventParquet.select(explode(eventParquet.list_of_characters).alias("character_name"),\
         eventParquet.id, eventParquet.title, eventParquet.description, to_date(eventParquet.start)\
         .alias("start_year"), to_date(eventParquet.end).alias("end_year"))\
         .withColumn('generanged_date', explode(expr('sequence(start_year,  end_year, interval 1 year)')))\
         .groupBy(year("generanged_date").alias("generanged_year")).agg(countDistinct("character_name")\
-            .alias("character_count")).orderBy("generanged_year").show(n=100)
-    eventParquet.write.mode('overwrite').parquet(char_count_each_year)
+            .alias("character_count")).orderBy("generanged_year")
+    epf3.write.mode('overwrite').parquet(char_count_each_year)
     
     # replace countDistinct with collect_set for character names (replace line 120+121 with line 125-126 below)
     # .groupBy(year("generanged_date").alias("generanged_year")).agg(collect_set("character_name")\
@@ -135,9 +135,9 @@ def gold_layer(spark_session, save_dir):
     epdf.createOrReplaceTempView("epdf")
     epff = epdf.select(explode(epdf.list_of_characters).alias("character_name"), epdf.id, epdf.title, epdf.description, to_date(epdf.start)\
         .alias("start_year"), to_date(epdf.end).alias("end_year"))\
-        .withColumn('generanged_date', explode(expr('sequence(start_year,  end_year, interval 1 year)')))
-    epff.join(char_p, 'character_name', 'inner').groupBy("character_name").count().show()
+        .withColumn('generanged_date', explode(expr('sequence(start_year,  end_year, interval 1 year)'))).join(char_p, 'character_name', 'inner').groupBy("character_name").count()
     epff.write.mode('overwrite').parquet(total_years_top10_chars)
+
     print("Gold layer processing end...")
 
 

@@ -17,3 +17,9 @@ docker exec -it bees_spark-master_1 bash
 
 ### execute task
 /opt/spark/bin/spark-submit --master spark://spark-master:7077 --driver-memory 1G --executor-memory 1G /opt/spark-apps/main.py
+
+### generate visualizations/tables
+python3 dev_viz.py <br>
+
+open visualizations dir <br>
+each generated table can be viewed in browser. it is loading parquet file into dataframe and can be converted to charts/graphs
