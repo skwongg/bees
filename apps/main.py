@@ -1,4 +1,6 @@
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import array_contains, explode, datediff, year, expr, to_date, collect_set, countDistinct, desc
+
 import requests
 import hashlib
 import time
@@ -20,29 +22,134 @@ def fetch_marvel(endpoint, save_dir):
         full_url = 'https://gateway.marvel.com/v1/public/{0}?apikey={1}&hash={2}&ts={3}&limit={4}&offset={5}'.format(endpoint, PUBLIC_KEY, hashed, ts, PAGE_LIMIT, offset)
         res = requests.get(full_url).json()
         file_write_time = int(time.time())
-        char_ts_dir = '{0}/case/landing/{1}/uploaded_at={2}/'.format(save_dir, endpoint, file_write_time)
-        char_ts_file = '{0}/case/landing/{1}/uploaded_at={2}/{3}.json'.format(save_dir, endpoint, file_write_time, endpoint)
-        
-        os.makedirs(char_ts_dir, exist_ok=True)
-        with open(char_ts_file, 'w') as f:
+        ts_dir_name = '{0}/case/landing/{1}/uploaded_at={2}/'.format(save_dir, endpoint, file_write_time)
+        ts_file_name = '{0}/case/landing/{1}/uploaded_at={2}/{3}.json'.format(save_dir, endpoint, file_write_time, endpoint)
+
+        os.makedirs(ts_dir_name, exist_ok=True)
+        with open(ts_file_name, 'w') as f:
             f.write(json.dumps(res) + '\n')
         offset+=PAGE_LIMIT
         total = max(total, res.get('data').get('total'))
 
-def init_spark():
-    spksql = SparkSession.builder\
-        .appName("marvel-bodyguard")\
-        .getOrCreate()
-    sc = spksql.sparkContext
-    return spksql,sc
+
+def silver_layer(spark_session, endpoint, save_dir):
+    print("Silver layer processing start...")
+
+    silver_dir_name = '{0}/case/silver/{1}/'.format(save_dir, endpoint)
+    silver_file_name = '{0}/case/silver/{1}/{2}.parquet'.format(save_dir, endpoint, endpoint)
+    
+    os.makedirs(silver_dir_name, exist_ok=True)
+
+
+    mypath = '{0}/case/landing/{1}/'.format(save_dir, endpoint) #this is all timestamp dirs
+    try: 
+        for endpoint_dir in os.listdir(mypath):
+            f = open(mypath+endpoint_dir+"/{0}.json".format(endpoint))
+            results = json.load(f).get("data").get("results")
+
+            if endpoint == "characters":
+                columns = ["id", "name", "description", "comics_count", "events_count", "stories_count", "series_count", "date_of_upload"]
+                data = []
+                for result in results:
+                    data.append((
+                        result.get("id"),
+                        result.get("name"),
+                        result.get("description"),
+                        result.get("comics").get("available"),
+                        result.get("events").get("available"),
+                        result.get("stories").get("available"),
+                        result.get("series").get("available"),
+                        endpoint_dir.split("=")[-1]
+                    ))
+                df = spark_session.createDataFrame(data, columns)
+                df.write.mode('append').parquet(silver_file_name)
+            
+            elif endpoint == "events":
+                columns = ["id", "title", "description", "list_of_characters", "end", "start", "date_of_upload"]
+                data = []
+                for result in results:
+                    data.append((
+                        result.get("id"),
+                        result.get("title"),
+                        result.get("description"),
+                        [char.get("name") for char in result.get("characters").get("items")],
+                        result.get("end"),
+                        result.get("start"),
+                        endpoint_dir.split("=")[-1]   
+                    ))
+                df = spark_session.createDataFrame(data, columns)
+                df.write.mode('append').parquet(silver_file_name)
+                
+    except FileNotFoundError:
+        print("No files found to process...")
+    
+    print("Silver layer processing complete...")
+
+def gold_layer(spark_session):
+    print("Gold layer processing start...")
+    # gold_dir_name = '{0}/case/gold/{1}/'.format(save_dir, endpoint)
+    # gold_file_name = '{0}/case/gold/{1}/{2}.parquet'.format(save_dir, endpoint, endpoint)
+    # os.makedirs(gold_dir_name, exist_ok=True)
+
+    ## first one -- total days in events for each of the top 10 most appearing characters
+    ep = spark_session.read.parquet("/opt/spark-data/case/silver/events/events.parquet")
+    ep.createOrReplaceTempView("ep")
+    event_df = ep.select(explode(ep.list_of_characters).alias("character_name"),\
+        datediff(ep.end, ep.start).alias("datediff")).groupBy("character_name")\
+        .sum("datediff")
+
+    cp = spark_session.read.parquet("/opt/spark-data/case/silver/characters/characters.parquet")
+    cp.createOrReplaceTempView("cp")
+    cp.select(cp.id, cp.name, cp.comics_count, cp.series_count, cp.stories_count, cp.events_count)\
+        .join(event_df, cp.name == event_df.character_name).orderBy(cp.comics_count, ascending=False).limit(10).show()
+
+
+    ##second one -- the number of characters appearing each year in events
+    eventParquet = spark_session.read.parquet("/opt/spark-data/case/silver/events/events.parquet")
+    eventParquet.createOrReplaceTempView("eventParquet")
+    eventParquet.select(explode(eventParquet.list_of_characters).alias("character_name"),\
+        eventParquet.id, eventParquet.title, eventParquet.description, to_date(eventParquet.start)\
+        .alias("start_year"), to_date(eventParquet.end).alias("end_year"))\
+        .withColumn('generanged_date', explode(expr('sequence(start_year,  end_year, interval 1 year)')))\
+        .groupBy(year("generanged_date").alias("generanged_year")).agg(countDistinct("character_name").alias("character_count")).orderBy("generanged_year").show(n=1000)
+        
+    # replace countDistinct with collect_set to see the set of character names
+    # .groupBy(year("generanged_date").alias("generanged_year")).agg(collect_set("character_name").alias("character_set")).orderBy("generanged_year").show(n=1000)
+
+
+
+    ## third one -- the total number of years each of the top 10 most appearing characters appeared in events
+    cpdf = spark_session.read.parquet("/opt/spark-data/case/silver/characters/characters.parquet")
+    cpdf.createOrReplaceTempView("cpdf")
+    char_p = cpdf.select(cpdf.name.alias("character_name")).orderBy(cpdf.comics_count, ascending=False).limit(10)
+
+    epdf = spark_session.read.parquet("/opt/spark-data/case/silver/events/events.parquet")
+    epdf.createOrReplaceTempView("epdf")
+    epff = epdf.select(explode(epdf.list_of_characters).alias("character_name"), epdf.id, epdf.title, epdf.description, to_date(epdf.start)\
+        .alias("start_year"), to_date(epdf.end).alias("end_year"))\
+        .withColumn('generanged_date', explode(expr('sequence(start_year,  end_year, interval 1 year)')))
+    epff.join(char_p, 'character_name', 'inner').groupBy("character_name").count().show(n=1000)
+
+
+    print("Gold layer processing end...")
+
+
+
 
 def main():
     print("spark job begin...")
-    file = "/opt/spark-data/marvel_test_data.json"
-    sql,sc = init_spark()
-    fetch_marvel("characters", "/opt/spark-data")
-    fetch_marvel("events", "/opt/spark-data")
-    
+    sp_sess = SparkSession.builder.appName("marvel-bodyguard").getOrCreate()
+
+    # fetch_marvel("characters", "/opt/spark-data")
+    # fetch_marvel("events", "/opt/spark-data")
+
+    #silver code -- doesnt have to happen serially
+    # silver_layer(sp_sess, "characters", "/opt/spark-data")
+    # silver_layer(sp_sess, "events", "/opt/spark-data")
+
+    #gold layer
+    gold_layer(sp_sess)
+
     print("spark job completed...")
   
 if __name__ == '__main__':
