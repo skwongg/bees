@@ -1,6 +1,6 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import array_contains, explode, datediff, year, expr, to_date\
-    , collect_set, countDistinct, desc
+from pyspark.sql.functions import explode, datediff, year, expr, to_date\
+    , collect_set, countDistinct
 
 import requests
 import hashlib
