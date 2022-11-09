@@ -2,9 +2,9 @@
 
 ## Run doc:
 
-### make a .env file with:<br> 
-MARVEL_PUBLIC_KEY="asdfghjkl1234567890"<br>
-MARVEL_PRIVATE_KEY"qwertyuiop0987654321"<br>
+### make .env file with your marvel API keys:<br>
+MARVEL_PUBLIC_KEY="&lt;your public key&gt;"<br>
+MARVEL_PRIVATE_KEY"&lt;your private key&gt;"<br>
 
 ### build the containers
 docker-compose build<br>
